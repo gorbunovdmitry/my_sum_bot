@@ -202,8 +202,8 @@ class SummaryBot:
                 )
                 return
             
-            # Используем URL из настроек или GitHub Pages по умолчанию
-            auth_url = settings.auth_server_url or "https://gorbunovdmitry.github.io/my_sum_bot/"
+            # Используем GitHub Pages URL (фронтенд)
+            auth_url = "https://gorbunovdmitry.github.io/my_sum_bot/"
             
             # Проверяем, доступен ли веб-сервер
             import requests
