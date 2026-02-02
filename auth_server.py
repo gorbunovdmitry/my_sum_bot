@@ -117,5 +117,8 @@ def auth_page():
 
 
 if __name__ == '__main__':
-    logger.info("Запуск веб-сервера авторизации на http://localhost:5000")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    import os
+    port = int(os.environ.get('PORT', 5000))
+    host = os.environ.get('HOST', '0.0.0.0')
+    logger.info(f"Запуск веб-сервера авторизации на {host}:{port}")
+    app.run(host=host, port=port, debug=False)
