@@ -109,11 +109,27 @@ def auth_callback():
 @app.route('/auth', methods=['GET'])
 def auth_page():
     """Страница авторизации"""
+    # Пробуем найти index.html (для GitHub Pages) или auth_page.html
+    index_path = Path(__file__).parent / 'index.html'
     auth_html_path = Path(__file__).parent / 'auth_page.html'
-    if auth_html_path.exists():
+    
+    if index_path.exists():
+        return send_from_directory(index_path.parent, 'index.html')
+    elif auth_html_path.exists():
         return send_from_directory(auth_html_path.parent, 'auth_page.html')
     else:
         return "Страница авторизации не найдена", 404
+
+@app.route('/', methods=['GET'])
+def root():
+    """Корневой путь - редирект на страницу авторизации"""
+    from flask import redirect
+    return redirect('/auth', code=302)
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint для Render"""
+    return jsonify({'status': 'ok', 'service': 'telegram-summary-bot-auth'}), 200
 
 
 if __name__ == '__main__':
