@@ -701,6 +701,16 @@ class SummaryBot:
                 await update.message.reply_text("❌ Вы не зарегистрированы. Используйте /start")
                 return
             
+            # Проверяем авторизацию через API (синхронизация с Render)
+            auth_status_api = await self._check_auth_from_server(user_id)
+            if auth_status_api and auth_status_api.get('authorized'):
+                # Синхронизируем статус из удаленной БД
+                if not user.is_authorized:
+                    user.is_authorized = True
+                    user.auth_state = auth_status_api.get('auth_state', 'done')
+                    db.commit()
+                    logger.info(f"Синхронизирован статус авторизации для пользователя {user_id} в команде /status")
+            
             # Проверяем настройки
             channels_count = db.query(Channel).filter_by(user_id=user.id).count()
             active_channels = db.query(Channel).filter_by(user_id=user.id, is_active=True).count()
