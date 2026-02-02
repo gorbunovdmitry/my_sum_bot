@@ -41,6 +41,26 @@ class SummaryBot:
         # Обработка callback кнопок
         self.app.add_handler(CallbackQueryHandler(self.handle_callback))
     
+    async def _check_auth_from_server(self, user_id: int) -> dict:
+        """Проверка авторизации через auth server API"""
+        try:
+            import requests
+            # Используем Render URL напрямую
+            auth_server_url = "https://telegram-summary-bot-auth.onrender.com"
+            check_url = f"{auth_server_url}/check-auth/{user_id}"
+            
+            logger.info(f"Проверка авторизации через API: {check_url}")
+            response = requests.get(check_url, timeout=5)
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"Статус авторизации от API: {result}")
+                return result
+            else:
+                logger.warning(f"API вернул статус {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Не удалось проверить авторизацию через API: {e}")
+        return None
+    
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды /start"""
         user_id = update.effective_user.id
