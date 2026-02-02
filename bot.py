@@ -65,6 +65,16 @@ class SummaryBot:
         finally:
             db.close()
         
+        # Проверяем авторизацию через API (если бот работает локально, а auth на Render)
+        auth_status = await self._check_auth_from_server(user_id)
+        if auth_status and auth_status.get('authorized'):
+            # Синхронизируем статус из удаленной БД
+            if not user.is_authorized:
+                user.is_authorized = True
+                user.auth_state = auth_status.get('auth_state', 'done')
+                db.commit()
+                logger.info(f"Синхронизирован статус авторизации для пользователя {user_id}")
+        
         # Проверяем статус авторизации
         if not user.is_authorized:
             welcome_text = """
@@ -143,6 +153,26 @@ class SummaryBot:
                 logger.warning(f"Пользователь {user_id} не найден в БД")
                 await update.message.reply_text("❌ Сначала используйте /start")
                 return
+            
+            # Проверяем авторизацию через API (синхронизация с Render)
+            auth_status = await self._check_auth_from_server(user_id)
+            if auth_status and auth_status.get('authorized'):
+                # Синхронизируем статус
+                if not user.is_authorized:
+                    user.is_authorized = True
+                    user.auth_state = auth_status.get('auth_state', 'done')
+                    db.commit()
+                    logger.info(f"Синхронизирован статус авторизации для пользователя {user_id}")
+            
+            # Проверяем авторизацию через API (синхронизация с Render)
+            auth_status = await self._check_auth_from_server(user_id)
+            if auth_status and auth_status.get('authorized'):
+                # Синхронизируем статус
+                if not user.is_authorized:
+                    user.is_authorized = True
+                    user.auth_state = auth_status.get('auth_state', 'done')
+                    db.commit()
+                    logger.info(f"Синхронизирован статус авторизации для пользователя {user_id}")
             
             if user.is_authorized:
                 logger.info(f"Пользователь {user_id} уже авторизован")

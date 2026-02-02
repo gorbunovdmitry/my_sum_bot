@@ -131,6 +131,31 @@ def health():
     """Health check endpoint для Render"""
     return jsonify({'status': 'ok', 'service': 'telegram-summary-bot-auth'}), 200
 
+@app.route('/check-auth/<int:user_id>', methods=['GET'])
+def check_auth(user_id):
+    """Проверка статуса авторизации пользователя"""
+    try:
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter_by(telegram_id=user_id).first()
+            if user:
+                return jsonify({
+                    'authorized': user.is_authorized,
+                    'enabled': user.is_enabled,
+                    'auth_state': user.auth_state
+                }), 200
+            else:
+                return jsonify({
+                    'authorized': False,
+                    'enabled': False,
+                    'auth_state': None
+                }), 200
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Ошибка проверки авторизации: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     import os
