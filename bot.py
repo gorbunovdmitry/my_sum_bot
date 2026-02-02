@@ -152,8 +152,8 @@ class SummaryBot:
                 )
                 return
             
-            # Используем URL из настроек или localhost по умолчанию
-            auth_url = settings.auth_server_url or "http://localhost:5000/auth"
+            # Используем URL из настроек или GitHub Pages по умолчанию
+            auth_url = settings.auth_server_url or "https://gorbunovdmitry.github.io/my_sum_bot/"
             
             # Проверяем, доступен ли веб-сервер
             import requests
