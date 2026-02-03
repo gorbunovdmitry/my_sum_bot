@@ -315,8 +315,19 @@ class SummaryBot:
             
             # Обработка номера телефона
             if user.auth_state == 'phone':
+                phone = text.strip()
+
+                # Проверяем формат номера
+                if not phone.startswith('+'):
+                    await update.message.reply_text(
+                        "❌ Номер должен быть в международном формате и начинаться с '+'.\n"
+                        "Например: +79001234567\n\n"
+                        "Попробуйте еще раз:"
+                    )
+                    return
+
                 # Сохраняем телефон и запрашиваем код
-                user.pending_phone = text
+                user.pending_phone = phone
                 user.auth_state = 'code'
                 db.commit()
                 
@@ -332,22 +343,37 @@ class SummaryBot:
                     )
                     
                     await temp_client.connect()
-                    await temp_client.send_code_request(text)
+                    # Небольшая задержка для "человечности"
+                    await asyncio.sleep(1)
+                    await temp_client.send_code_request(phone)
                     
                     # Сохраняем клиент для дальнейшего использования
                     self.auth_clients[user_id] = temp_client
                     
                     await update.message.reply_text(
-                        "✅ Код подтверждения отправлен в Telegram!\n\n"
-                        "Введите код, который вы получили:"
+                        "✅ Код отправлен!\n\n"
+                        "Где искать код:\n"
+                        "- В Telegram, в чате **Telegram** (\"Login code\")\n"
+                        "- Иногда приходит пуш-уведомлением\n"
+                        "- SMS — редкий фоллбек, обычно не используется\n\n"
+                        "Отправьте сюда код цифрами (например: 12345)."
                     )
+                    logger.info(f"send_code_request OK for user={user_id} phone={phone}")
                 except Exception as e:
                     logger.error(f"Ошибка запроса кода: {e}", exc_info=True)
+                    err = str(e)
+                    if "FLOOD_WAIT" in err:
+                        await update.message.reply_text(
+                            "⏳ Telegram временно ограничил запросы кода (FLOOD_WAIT).\n"
+                            "Подождите 2–5 минут и попробуйте снова: /auth"
+                        )
+                    else:
                     await update.message.reply_text(
                         f"❌ Ошибка: {e}\n\n"
                         "Попробуйте еще раз: /auth"
                     )
                     user.auth_state = None
+                    user.pending_phone = None
                     db.commit()
                     # Закрываем клиент при ошибке
                     if user_id in self.auth_clients:
