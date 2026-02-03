@@ -188,6 +188,7 @@ class SummaryBotApp:
         
         # Запускаем бота в основном потоке (блокирующий вызов)
         try:
+            # bot.run() - синхронный метод, не нужно asyncio.run
             self.bot.run()
         except KeyboardInterrupt:
             logger.info("Остановка приложения...")
