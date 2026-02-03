@@ -34,6 +34,7 @@ class SummaryBot:
         self.app.add_handler(CommandHandler("summary", self.get_summary))
         self.app.add_handler(CommandHandler("status", self.status))
         self.app.add_handler(CommandHandler("chats", self.list_chats))
+        self.app.add_handler(CommandHandler("import_session", self.import_session))
         
         # Обработка сообщений (для авторизации)
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
@@ -192,18 +193,24 @@ class SummaryBot:
                         self.app_instance.telegram_clients[user.id] = client
                     return
             
-            # Начинаем авторизацию через телефон
+            # Предлагаем варианты авторизации
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            
+            keyboard = [
+                [InlineKeyboardButton("📱 Через номер телефона", callback_data="auth_method_phone")],
+                [InlineKeyboardButton("💻 Использовать Telegram Desktop", callback_data="auth_method_desktop")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await update.message.reply_text(
-                "🔐 Авторизация через номер телефона\n\n"
-                "📱 Отправьте ваш номер телефона в международном формате:\n"
-                "Например: +79001234567\n\n"
-                "💡 Номер должен начинаться с '+' и кода страны"
+                "🔐 Выберите способ авторизации:\n\n"
+                "📱 **Через номер телефона** - стандартный способ\n"
+                "💻 **Telegram Desktop** - если код не приходит\n\n"
+                "💡 Рекомендуем Telegram Desktop, если код не приходит",
+                reply_markup=reply_markup
             )
             
-            # Устанавливаем состояние авторизации
-            user.auth_state = 'phone'
-            db.commit()
-            logger.info(f"Пользователь {user_id} начал авторизацию, ожидается номер телефона")
+            logger.info(f"Пользователь {user_id} начал авторизацию, ожидается выбор метода")
             
         except Exception as e:
             logger.error(f"Ошибка в команде /auth: {e}", exc_info=True)
