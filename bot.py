@@ -368,10 +368,10 @@ class SummaryBot:
                             "Подождите 2–5 минут и попробуйте снова: /auth"
                         )
                     else:
-                    await update.message.reply_text(
-                        f"❌ Ошибка: {e}\n\n"
-                        "Попробуйте еще раз: /auth"
-                    )
+                        await update.message.reply_text(
+                            f"❌ Ошибка: {e}\n\n"
+                            "Попробуйте еще раз: /auth"
+                        )
                     user.auth_state = None
                     user.pending_phone = None
                     db.commit()
