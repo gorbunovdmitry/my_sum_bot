@@ -635,6 +635,40 @@ class SummaryBot:
         data = query.data
         user_id = query.from_user.id
         
+        # Обработка выбора метода авторизации
+        if data == "auth_method_phone":
+            from database import SessionLocal
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter_by(telegram_id=user_id).first()
+                if user:
+                    user.auth_state = 'phone'
+                    db.commit()
+                    await query.edit_message_text(
+                        "📱 Авторизация через номер телефона\n\n"
+                        "Отправьте ваш номер телефона в международном формате:\n"
+                        "Например: +79001234567\n\n"
+                        "💡 Номер должен начинаться с '+' и кода страны"
+                    )
+                    logger.info(f"Пользователь {user_id} выбрал авторизацию через телефон")
+            finally:
+                db.close()
+            return
+        
+        elif data == "auth_method_desktop":
+            await query.edit_message_text(
+                "💻 **Авторизация через Telegram Desktop**\n\n"
+                "Этот метод использует существующую сессию из Telegram Desktop.\n\n"
+                "**Инструкция:**\n"
+                "1. Установите Telegram Desktop (если еще не установлен)\n"
+                "2. Авторизуйтесь в Telegram Desktop\n"
+                "3. Отправьте команду /import_session\n"
+                "4. Бот найдет сессию автоматически\n\n"
+                "💡 Этот метод работает надежно, т.к. использует уже авторизованную сессию!"
+            )
+            logger.info(f"Пользователь {user_id} выбрал авторизацию через Telegram Desktop")
+            return
+        
         if data.startswith("chat_"):
             # Обработка включения/выключения чата
             parts = data.split("_")
@@ -800,6 +834,150 @@ class SummaryBot:
             logger.info(f"Сводка отправлена пользователю {user_telegram_id}")
         except Exception as e:
             logger.error(f"Ошибка отправки сводки: {e}")
+    
+    async def import_session(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Импорт сессии из Telegram Desktop"""
+        user_id = update.effective_user.id
+        logger.info(f"Получена команда /import_session от пользователя {user_id}")
+        
+        from database import SessionLocal
+        import shutil
+        import os
+        
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter_by(telegram_id=user_id).first()
+            
+            if not user:
+                await update.message.reply_text("❌ Сначала используйте /start")
+                return
+            
+            # Ищем сессию Telegram Desktop
+            # macOS: ~/Library/Application Support/Telegram Desktop/tdata/
+            # Windows: %APPDATA%\Telegram Desktop\tdata\
+            # Linux: ~/.local/share/TelegramDesktop/tdata/
+            
+            possible_locations = []
+            
+            # macOS
+            home = os.path.expanduser("~")
+            macos_path = os.path.join(home, "Library", "Application Support", "Telegram Desktop", "tdata")
+            if os.path.exists(macos_path):
+                possible_locations.append(macos_path)
+            
+            # Linux
+            linux_path = os.path.join(home, ".local", "share", "TelegramDesktop", "tdata")
+            if os.path.exists(linux_path):
+                possible_locations.append(linux_path)
+            
+            # Windows (если запущено на Windows)
+            if os.name == 'nt':
+                appdata = os.getenv('APPDATA')
+                if appdata:
+                    windows_path = os.path.join(appdata, "Telegram Desktop", "tdata")
+                    if os.path.exists(windows_path):
+                        possible_locations.append(windows_path)
+            
+            if not possible_locations:
+                await update.message.reply_text(
+                    "❌ Telegram Desktop не найден или не авторизован.\n\n"
+                    "**Что делать:**\n"
+                    "1. Установите Telegram Desktop: https://desktop.telegram.org/\n"
+                    "2. Авторизуйтесь в Telegram Desktop\n"
+                    "3. Попробуйте /import_session еще раз\n\n"
+                    "Или используйте авторизацию через номер телефона: /auth"
+                )
+                return
+            
+            # Ищем файлы сессий (обычно начинаются с "D877F783D5D3EF8C" или "A7FDF864FBC10B77")
+            session_found = False
+            for location in possible_locations:
+                try:
+                    # Ищем файлы сессий
+                    for file in os.listdir(location):
+                        if file.endswith('.session') or (len(file) == 16 and file.isalnum()):
+                            session_path = os.path.join(location, file)
+                            
+                            # Пробуем использовать эту сессию
+                            try:
+                                temp_client = TelegramClient(
+                                    session_path,
+                                    settings.telegram_api_id,
+                                    settings.telegram_api_hash
+                                )
+                                
+                                await temp_client.connect()
+                                
+                                if await temp_client.is_user_authorized():
+                                    # Получаем информацию о пользователе
+                                    me = await temp_client.get_me()
+                                    
+                                    # Копируем сессию в нужное место
+                                    target_session = settings.session_dir / f"user_{user.id}.session"
+                                    settings.session_dir.mkdir(exist_ok=True)
+                                    
+                                    # Копируем файл сессии
+                                    shutil.copy(session_path, target_session)
+                                    
+                                    # Сохраняем данные пользователя
+                                    user.phone = me.phone
+                                    user.is_authorized = True
+                                    user.auth_state = 'done'
+                                    db.commit()
+                                    
+                                    await temp_client.disconnect()
+                                    
+                                    await update.message.reply_text(
+                                        f"✅ Сессия успешно импортирована!\n\n"
+                                        f"Пользователь: {me.first_name} {me.phone}\n\n"
+                                        "Теперь вы можете:\n"
+                                        "• /enable - Включить бота\n"
+                                        "• /chats - Выбрать чаты для сканирования"
+                                    )
+                                    
+                                    # Сохраняем клиент в app_instance
+                                    if self.app_instance:
+                                        safe_client = SafeTelegramClient(user.id, user.phone)
+                                        if await safe_client.connect():
+                                            self.app_instance.telegram_clients[user.id] = safe_client
+                                    
+                                    session_found = True
+                                    logger.info(f"Сессия импортирована для пользователя {user_id} из {session_path}")
+                                    break
+                                    
+                            except Exception as e:
+                                logger.debug(f"Не удалось использовать сессию {session_path}: {e}")
+                                try:
+                                    await temp_client.disconnect()
+                                except:
+                                    pass
+                                continue
+                    
+                    if session_found:
+                        break
+                        
+                except Exception as e:
+                    logger.warning(f"Ошибка при поиске сессий в {location}: {e}")
+                    continue
+            
+            if not session_found:
+                await update.message.reply_text(
+                    "❌ Не найдена авторизованная сессия в Telegram Desktop.\n\n"
+                    "**Что проверить:**\n"
+                    "1. Убедитесь, что Telegram Desktop установлен\n"
+                    "2. Убедитесь, что вы авторизованы в Telegram Desktop\n"
+                    "3. Попробуйте перезапустить Telegram Desktop\n\n"
+                    "Или используйте авторизацию через номер телефона: /auth"
+                )
+                
+        except Exception as e:
+            logger.error(f"Ошибка импорта сессии: {e}", exc_info=True)
+            await update.message.reply_text(
+                f"❌ Ошибка импорта сессии: {e}\n\n"
+                "Попробуйте авторизацию через номер телефона: /auth"
+            )
+        finally:
+            db.close()
     
     def run(self):
         """Запуск бота (синхронная версия)"""
