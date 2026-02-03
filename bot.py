@@ -34,6 +34,7 @@ class SummaryBot:
         self.app.add_handler(CommandHandler("summary", self.get_summary))
         self.app.add_handler(CommandHandler("status", self.status))
         self.app.add_handler(CommandHandler("chats", self.list_chats))
+        self.app.add_handler(CommandHandler("setup_client", self.setup_client))
         
         # Обработка сообщений (для авторизации)
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
@@ -510,13 +511,27 @@ class SummaryBot:
                 # Используем клиент из главного приложения
                 client = self.app_instance.telegram_clients.get(user.id)
                 if not client:
+                    # Проверяем, есть ли сессия
+                    session_file = settings.session_dir / f"user_{user.id}.session"
+                    if not session_file.exists() or not user.phone:
+                        await update.message.reply_text(
+                            "⚠️ Для работы с чатами нужна авторизация через Telegram Client API.\n\n"
+                            "Telegram Login Widget подтверждает вашу личность, но для доступа к чатам нужна сессия.\n\n"
+                            "Используйте команду /setup_client для авторизации через QR-код."
+                        )
+                        return
+                    
                     # Создаем клиент если его нет
                     client = SafeTelegramClient(user.id, user.phone)
                     if await client.connect():
                         self.app_instance.telegram_clients[user.id] = client
                     else:
                         await update.message.reply_text(
-                            "❌ Не удалось подключиться. Попробуйте /auth еще раз."
+                            "❌ Не удалось подключиться к Telegram Client API.\n\n"
+                            "Возможные причины:\n"
+                            "• Сессия устарела\n"
+                            "• Нужна повторная авторизация\n\n"
+                            "Используйте /setup_client для авторизации через QR-код."
                         )
                         return
                 
