@@ -98,14 +98,23 @@ class UserInterest(Base):
 
 
 # Создаем движок БД
-engine = create_engine(
-    settings.database_url,
-    echo=False,  # Установите True для отладки SQL
-    connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {}
-)
-
-# Создаем таблицы
-Base.metadata.create_all(engine)
+try:
+    engine = create_engine(
+        settings.database_url,
+        echo=False,  # Установите True для отладки SQL
+        connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {}
+    )
+    
+    # Создаем таблицы (только если подключение успешно)
+    try:
+        Base.metadata.create_all(engine)
+    except Exception as e:
+        # Если не удалось подключиться, не падаем при импорте
+        # Подключение будет установлено при первом использовании
+        pass
+except Exception as e:
+    # Если не удалось создать engine, создадим его позже
+    engine = None
 
 # Создаем сессию
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

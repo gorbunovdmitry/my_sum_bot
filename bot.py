@@ -184,16 +184,6 @@ class SummaryBot:
                     db.commit()
                     logger.info(f"Синхронизирован статус авторизации для пользователя {user_id}")
             
-            # Проверяем авторизацию через API (синхронизация с Render)
-            auth_status = await self._check_auth_from_server(user_id)
-            if auth_status and auth_status.get('authorized'):
-                # Синхронизируем статус
-                if not user.is_authorized:
-                    user.is_authorized = True
-                    user.auth_state = auth_status.get('auth_state', 'done')
-                    db.commit()
-                    logger.info(f"Синхронизирован статус авторизации для пользователя {user_id}")
-            
             if user.is_authorized:
                 logger.info(f"Пользователь {user_id} уже авторизован")
                 await update.message.reply_text(
@@ -205,15 +195,9 @@ class SummaryBot:
             # Используем GitHub Pages URL (фронтенд)
             auth_url = "https://gorbunovdmitry.github.io/my_sum_bot/"
             
-            # Проверяем, доступен ли веб-сервер
-            import requests
-            try:
-                response = requests.get(auth_url, timeout=2)
-                server_available = response.status_code == 200
-            except:
-                server_available = False
+            logger.info(f"Отправка ссылки авторизации пользователю {user_id}: {auth_url}")
             
-            if server_available:
+            try:
                 await update.message.reply_text(
                     "🔐 Авторизация через Telegram Login Widget\n\n"
                     f"📱 Откройте ссылку в браузере:\n\n"
@@ -222,15 +206,13 @@ class SummaryBot:
                     "✅ Это официальный способ авторизации, который не блокируется Telegram.",
                     disable_web_page_preview=False
                 )
-            else:
+                logger.info(f"Сообщение авторизации отправлено пользователю {user_id}")
+            except Exception as e:
+                logger.error(f"Ошибка отправки сообщения пользователю {user_id}: {e}", exc_info=True)
                 await update.message.reply_text(
-                    "🔐 Авторизация через Telegram Login Widget\n\n"
-                    f"⚠️ Веб-сервер авторизации не доступен.\n\n"
-                    f"Попробуйте открыть в браузере:\n{auth_url}\n\n"
-                    "Или проверьте, что веб-сервер запущен.",
-                    disable_web_page_preview=False
+                    f"❌ Ошибка отправки сообщения: {e}\n\n"
+                    f"Попробуйте открыть ссылку вручную:\n{auth_url}"
                 )
-                logger.warning(f"Веб-сервер авторизации не доступен для пользователя {user_id}")
         except Exception as e:
             logger.error(f"Ошибка в команде /auth: {e}", exc_info=True)
             await update.message.reply_text(
