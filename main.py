@@ -212,6 +212,6 @@ if __name__ == "__main__":
     app = SummaryBotApp()
     
     try:
-        asyncio.run(app.run())
+        app.run()  # run() - синхронный метод, не нужен asyncio.run
     except KeyboardInterrupt:
         logger.info("Приложение остановлено")
