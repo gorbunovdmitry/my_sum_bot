@@ -34,7 +34,6 @@ class SummaryBot:
         self.app.add_handler(CommandHandler("summary", self.get_summary))
         self.app.add_handler(CommandHandler("status", self.status))
         self.app.add_handler(CommandHandler("chats", self.list_chats))
-        self.app.add_handler(CommandHandler("setup_client", self.setup_client))
         
         # Обработка сообщений (для авторизации)
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
@@ -193,24 +192,18 @@ class SummaryBot:
                         self.app_instance.telegram_clients[user.id] = client
                     return
             
-            # Предлагаем выбор метода авторизации
-            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-            
-            keyboard = [
-                [InlineKeyboardButton("📱 Номер телефона + код", callback_data="auth_phone")],
-                [InlineKeyboardButton("📷 QR-код (если код не приходит)", callback_data="auth_qr")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
+            # Начинаем авторизацию через телефон
             await update.message.reply_text(
-                "🔐 Выберите способ авторизации:\n\n"
-                "📱 **Номер телефона** - стандартный способ\n"
-                "📷 **QR-код** - если код не приходит\n\n"
-                "💡 Рекомендуем начать с номера телефона",
-                reply_markup=reply_markup
+                "🔐 Авторизация через номер телефона\n\n"
+                "📱 Отправьте ваш номер телефона в международном формате:\n"
+                "Например: +79001234567\n\n"
+                "💡 Номер должен начинаться с '+' и кода страны"
             )
             
-            logger.info(f"Пользователь {user_id} начал авторизацию, ожидается выбор метода")
+            # Устанавливаем состояние авторизации
+            user.auth_state = 'phone'
+            db.commit()
+            logger.info(f"Пользователь {user_id} начал авторизацию, ожидается номер телефона")
             
         except Exception as e:
             logger.error(f"Ошибка в команде /auth: {e}", exc_info=True)
@@ -220,220 +213,6 @@ class SummaryBot:
             )
         finally:
             db.close()
-    
-    async def _wait_for_qr_auth(self, user_id: int, update: Update):
-        """Ожидание завершения QR-авторизации"""
-        from database import SessionLocal
-        
-        try:
-            temp_client = self.auth_clients.get(user_id)
-            if not temp_client:
-                return
-            
-            # Ждем авторизации через QR-код (максимум 5 минут)
-            # Проверяем статус авторизации периодически
-            for i in range(60):  # Проверяем каждые 5 секунд в течение 5 минут
-                try:
-                    # Проверяем, авторизован ли клиент
-                    if await temp_client.is_user_authorized():
-                        logger.info(f"Пользователь {user_id} успешно авторизован через QR-код")
-                        break
-                    await asyncio.sleep(5)
-                except Exception as e:
-                    logger.error(f"Ошибка проверки авторизации: {e}")
-                    await asyncio.sleep(5)
-            else:
-                raise asyncio.TimeoutError("Время ожидания QR-авторизации истекло (5 минут)")
-            
-            # Финальная проверка
-            if not await temp_client.is_user_authorized():
-                raise Exception("Авторизация не завершена")
-            
-            # Авторизация успешна
-            db = SessionLocal()
-            try:
-                user = db.query(User).filter_by(telegram_id=user_id).first()
-                if not user:
-                    return
-                
-                # Сохраняем сессию
-                import shutil
-                temp_session = settings.session_dir / f"temp_qr_{user_id}.session"
-                final_session = settings.session_dir / f"user_{user.id}.session"
-                if temp_session.exists():
-                    shutil.copy(temp_session, final_session)
-                
-                # Получаем информацию о пользователе
-                me = await temp_client.get_me()
-                user.phone = me.phone
-                user.is_authorized = True
-                user.auth_state = 'done'
-                user.pending_phone = None
-                db.commit()
-                
-                # Закрываем временный клиент
-                await temp_client.disconnect()
-                del self.auth_clients[user_id]
-                if hasattr(self, 'qr_data'):
-                    self.qr_data.pop(user_id, None)
-                
-                # Удаляем временную сессию
-                if temp_session.exists():
-                    temp_session.unlink()
-                
-                await update.message.reply_text(
-                    "✅ Авторизация успешна!\n\n"
-                    "Теперь вы можете:\n"
-                    "/enable - Включить бота\n"
-                    "/chats - Выбрать чаты для сканирования"
-                )
-            finally:
-                db.close()
-                
-        except asyncio.TimeoutError:
-            await update.message.reply_text(
-                "⏱️ Время ожидания истекло. Попробуйте /auth еще раз."
-            )
-        except Exception as e:
-            logger.error(f"Ошибка QR-авторизации: {e}", exc_info=True)
-            await update.message.reply_text(
-                f"❌ Ошибка авторизации: {e}\n\n"
-                "Попробуйте еще раз: /auth"
-            )
-    
-    async def _start_qr_auth(self, query, user_id: int):
-        """Начать авторизацию через QR-код"""
-        from database import SessionLocal
-        from io import BytesIO
-        import qrcode
-        
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter_by(telegram_id=user_id).first()
-            
-            if not user:
-                await query.edit_message_text("❌ Сначала используйте /start")
-                return
-            
-            # Создаем временный клиент для QR-авторизации
-            temp_session = settings.session_dir / f"temp_qr_{user_id}.session"
-            try:
-                client = TelegramClient(
-                    str(temp_session),
-                    settings.telegram_api_id,
-                    settings.telegram_api_hash
-                )
-                
-                await client.connect()
-                
-                if not await client.is_user_authorized():
-                    # Генерируем QR-код
-                    qr_code = await client.qr_login()
-                    
-                    if qr_code:
-                        # Отправляем QR-код как изображение
-                        qr = qrcode.QRCode(version=1, box_size=10, border=5)
-                        qr.add_data(qr_code)
-                        qr.make(fit=True)
-                        
-                        img = qr.make_image(fill_color="black", back_color="white")
-                        bio = BytesIO()
-                        img.save(bio, format='PNG')
-                        bio.seek(0)
-                        
-                        await query.message.reply_photo(
-                            photo=bio,
-                            caption=(
-                                "📷 Авторизация через QR-код\n\n"
-                                "1. Откройте Telegram на телефоне\n"
-                                "2. Настройки → Устройства → Связать устройство\n"
-                                "3. Отсканируйте QR-код выше\n\n"
-                                "⏳ Ожидание авторизации..."
-                            )
-                        )
-                        
-                        # Сохраняем клиент для ожидания
-                        if not hasattr(self, 'qr_clients'):
-                            self.qr_clients = {}
-                        self.qr_clients[user_id] = client
-                        
-                        # Устанавливаем состояние
-                        user.auth_state = 'qr'
-                        db.commit()
-                        
-                        # Ждем авторизации в фоне
-                        asyncio.create_task(self._wait_for_qr_auth_background(user_id, client, temp_session, user.id))
-                        
-                        await query.edit_message_text("✅ QR-код отправлен! Отсканируйте его в Telegram.")
-                    else:
-                        await query.edit_message_text(
-                            "❌ Не удалось создать QR-код.\n\n"
-                            "Попробуйте авторизацию через номер телефона: /auth"
-                        )
-                else:
-                    await query.edit_message_text("✅ Уже авторизован!")
-            except Exception as e:
-                logger.error(f"Ошибка QR-авторизации: {e}", exc_info=True)
-                await query.edit_message_text(
-                    f"❌ Ошибка: {e}\n\nПопробуйте авторизацию через телефон: /auth"
-                )
-        finally:
-            db.close()
-    
-    async def _wait_for_qr_auth_background(self, user_id: int, client, temp_session, db_user_id):
-        """Ожидание завершения QR-авторизации в фоне"""
-        from database import SessionLocal
-        import shutil
-        
-        try:
-            # Ждем авторизации (максимум 5 минут)
-            for i in range(60):
-                await asyncio.sleep(5)
-                if await client.is_user_authorized():
-                    # Сохраняем сессию
-                    final_session = settings.session_dir / f"user_{db_user_id}.session"
-                    if temp_session.exists():
-                        shutil.copy(temp_session, final_session)
-                    
-                    # Получаем информацию о пользователе
-                    me = await client.get_me()
-                    
-                    db = SessionLocal()
-                    try:
-                        user = db.query(User).filter_by(id=db_user_id).first()
-                        if user:
-                            user.phone = me.phone
-                            user.is_authorized = True
-                            user.auth_state = 'done'
-                            db.commit()
-                            
-                            # Уведомляем пользователя через бота
-                            try:
-                                await self.app.bot.send_message(
-                                    chat_id=user_id,
-                                    text=(
-                                        "✅ Авторизация через QR-код успешна!\n\n"
-                                        "Теперь вы можете:\n"
-                                        "• /enable - Включить бота\n"
-                                        "• /chats - Выбрать чаты для сканирования"
-                                    )
-                                )
-                            except:
-                                pass
-                    finally:
-                        db.close()
-                    
-                    await client.disconnect()
-                    if hasattr(self, 'qr_clients'):
-                        self.qr_clients.pop(user_id, None)
-                    return
-            
-            # Таймаут
-            await client.disconnect()
-            if hasattr(self, 'qr_clients'):
-                self.qr_clients.pop(user_id, None)
-        except Exception as e:
-            logger.error(f"Ошибка ожидания QR-авторизации: {e}", exc_info=True)
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка текстовых сообщений (для авторизации через телефон)"""
@@ -483,22 +262,46 @@ class SummaryBot:
                     )
                     
                     await temp_client.connect()
-                    # Небольшая задержка для "человечности"
-                    await asyncio.sleep(1)
-                    await temp_client.send_code_request(phone)
+                    
+                    logger.info(f"Отправка запроса кода для номера {phone}")
+                    # Отправляем запрос кода
+                    result = await temp_client.send_code_request(phone)
+                    
+                    logger.info(f"Результат send_code_request: type={type(result)}, phone_code_hash={getattr(result, 'phone_code_hash', 'N/A')}")
+                    
+                    # Сохраняем phone_code_hash для дальнейшего использования
+                    if not hasattr(self, 'phone_code_hashes'):
+                        self.phone_code_hashes = {}
+                    if hasattr(result, 'phone_code_hash'):
+                        self.phone_code_hashes[user_id] = result.phone_code_hash
+                        logger.info(f"Сохранен phone_code_hash для user={user_id}")
+                    
+                    # Определяем тип отправки кода
+                    code_type = "Telegram сообщение"
+                    if hasattr(result, 'type'):
+                        if result.type == 1:  # SentCodeTypeSms
+                            code_type = "SMS"
+                        elif result.type == 2:  # SentCodeTypeCall
+                            code_type = "телефонный звонок"
+                        elif result.type == 3:  # SentCodeTypeFlashCall
+                            code_type = "мгновенный звонок"
                     
                     # Сохраняем клиент для дальнейшего использования
+                    if not hasattr(self, 'auth_clients'):
+                        self.auth_clients = {}
                     self.auth_clients[user_id] = temp_client
                     
                     await update.message.reply_text(
-                        "✅ Код отправлен!\n\n"
+                        f"✅ Запрос кода отправлен!\n\n"
+                        f"📱 Тип отправки: **{code_type}**\n\n"
                         "Где искать код:\n"
-                        "- В Telegram, в чате **Telegram** (\"Login code\")\n"
-                        "- Иногда приходит пуш-уведомлением\n"
-                        "- SMS — редкий фоллбек, обычно не используется\n\n"
+                        "• В Telegram, в чате **Telegram** (\"Login code\")\n"
+                        "• В SMS (если указано выше)\n"
+                        "• Пуш-уведомлением в Telegram\n\n"
+                        "⏳ Код обычно приходит в течение 1-2 минут.\n\n"
                         "Отправьте сюда код цифрами (например: 12345)."
                     )
-                    logger.info(f"send_code_request OK for user={user_id} phone={phone}")
+                    logger.info(f"send_code_request успешно выполнен для user={user_id} phone={phone} type={code_type}")
                 except Exception as e:
                     logger.error(f"Ошибка запроса кода: {e}", exc_info=True)
                     err = str(e)
@@ -737,8 +540,7 @@ class SummaryBot:
                     if not session_file.exists() or not user.phone:
                         await update.message.reply_text(
                             "⚠️ Для работы с чатами нужна авторизация через Telegram Client API.\n\n"
-                            "Telegram Login Widget подтверждает вашу личность, но для доступа к чатам нужна сессия.\n\n"
-                            "Используйте команду /setup_client для авторизации через QR-код."
+                            "Используйте команду /auth для авторизации через номер телефона."
                         )
                         return
                     
@@ -752,7 +554,7 @@ class SummaryBot:
                             "Возможные причины:\n"
                             "• Сессия устарела\n"
                             "• Нужна повторная авторизация\n\n"
-                            "Используйте /setup_client для авторизации через QR-код."
+                            "Используйте /auth для повторной авторизации."
                         )
                         return
                 
@@ -795,118 +597,6 @@ class SummaryBot:
         finally:
             db.close()
     
-    async def setup_client(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Настройка авторизации через Telegram Client API (QR-код)"""
-        user_id = update.effective_user.id
-        logger.info(f"Получена команда /setup_client от пользователя {user_id}")
-        
-        from database import SessionLocal
-        from io import BytesIO
-        import qrcode
-        
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter_by(telegram_id=user_id).first()
-            
-            if not user or not user.is_authorized:
-                await update.message.reply_text(
-                    "❌ Сначала авторизуйтесь через Telegram Login Widget: /auth"
-                )
-                return
-            
-            # Проверяем, есть ли уже сессия
-            session_file = settings.session_dir / f"user_{user.id}.session"
-            if session_file.exists() and user.phone:
-                # Пробуем подключиться
-                client = SafeTelegramClient(user.id, user.phone)
-                if await client.connect():
-                    await update.message.reply_text(
-                        "✅ Сессия уже настроена! Команда /chats должна работать."
-                    )
-                    return
-            
-            # Создаем временный клиент для QR-авторизации
-            temp_session = settings.session_dir / f"temp_qr_{user_id}.session"
-            try:
-                client = TelegramClient(
-                    str(temp_session),
-                    settings.telegram_api_id,
-                    settings.telegram_api_hash
-                )
-                
-                await client.connect()
-                
-                if not await client.is_user_authorized():
-                    # Генерируем QR-код
-                    qr_code = await client.qr_login()
-                    
-                    if qr_code:
-                        # Отправляем QR-код как изображение
-                        qr = qrcode.QRCode(version=1, box_size=10, border=5)
-                        qr.add_data(qr_code)
-                        qr.make(fit=True)
-                        
-                        img = qr.make_image(fill_color="black", back_color="white")
-                        bio = BytesIO()
-                        img.save(bio, format='PNG')
-                        bio.seek(0)
-                        
-                        await update.message.reply_photo(
-                            photo=bio,
-                            caption=(
-                                "📱 Авторизация через QR-код\n\n"
-                                "1. Откройте Telegram на телефоне\n"
-                                "2. Настройки → Устройства → Связать устройство\n"
-                                "3. Отсканируйте QR-код выше\n\n"
-                                "⏳ Ожидание авторизации..."
-                            )
-                        )
-                        
-                        # Ждем авторизации (максимум 5 минут)
-                        for i in range(60):
-                            await asyncio.sleep(5)
-                            if await client.is_user_authorized():
-                                # Сохраняем сессию
-                                final_session = settings.session_dir / f"user_{user.id}.session"
-                                if temp_session.exists():
-                                    import shutil
-                                    shutil.copy(temp_session, final_session)
-                                
-                                # Получаем информацию о пользователе
-                                me = await client.get_me()
-                                user.phone = me.phone
-                                db.commit()
-                                
-                                await client.disconnect()
-                                
-                                await update.message.reply_text(
-                                    "✅ Авторизация через Client API успешна!\n\n"
-                                    "Теперь команда /chats будет работать."
-                                )
-                                return
-                        
-                        await client.disconnect()
-                        await update.message.reply_text(
-                            "⏱️ Время ожидания истекло. Попробуйте еще раз: /setup_client"
-                        )
-                    else:
-                        await client.disconnect()
-                        await update.message.reply_text(
-                            "❌ Не удалось создать QR-код. Попробуйте авторизацию через телефон."
-                        )
-                else:
-                    await client.disconnect()
-                    await update.message.reply_text(
-                        "✅ Уже авторизован! Команда /chats должна работать."
-                    )
-            except Exception as e:
-                logger.error(f"Ошибка QR-авторизации: {e}", exc_info=True)
-                await update.message.reply_text(
-                    f"❌ Ошибка: {e}\n\nПопробуйте еще раз: /setup_client"
-                )
-        finally:
-            db.close()
-    
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка callback кнопок"""
         query = update.callback_query
@@ -914,32 +604,6 @@ class SummaryBot:
         
         data = query.data
         user_id = query.from_user.id
-        
-        # Обработка выбора метода авторизации
-        if data == "auth_phone":
-            from database import SessionLocal
-            db = SessionLocal()
-            try:
-                user = db.query(User).filter_by(telegram_id=user_id).first()
-                if user:
-                    user.auth_state = 'phone'
-                    db.commit()
-                    await query.edit_message_text(
-                        "📱 Авторизация через номер телефона\n\n"
-                        "Отправьте ваш номер телефона в международном формате:\n"
-                        "Например: +79001234567\n\n"
-                        "💡 Номер должен начинаться с '+' и кода страны"
-                    )
-                    logger.info(f"Пользователь {user_id} выбрал авторизацию через телефон")
-            finally:
-                db.close()
-            return
-        
-        elif data == "auth_qr":
-            # Авторизация через QR-код
-            await query.edit_message_text("📷 Генерация QR-кода...")
-            await self._start_qr_auth(query, user_id)
-            return
         
         if data.startswith("chat_"):
             # Обработка включения/выключения чата
