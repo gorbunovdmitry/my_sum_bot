@@ -407,7 +407,17 @@ class SummaryBot:
                     
                     # Авторизуемся (с небольшой задержкой для безопасности)
                     await asyncio.sleep(0.5)  # Задержка для снижения риска блокировки
-                    await temp_client.sign_in(user.pending_phone, code)
+                    
+                    # Используем phone_code_hash если он был сохранен
+                    phone_code_hash = None
+                    if hasattr(self, 'phone_code_hashes') and user_id in self.phone_code_hashes:
+                        phone_code_hash = self.phone_code_hashes[user_id]
+                        logger.info(f"Использование сохраненного phone_code_hash для user={user_id}")
+                    
+                    if phone_code_hash:
+                        await temp_client.sign_in(user.pending_phone, code, phone_code_hash=phone_code_hash)
+                    else:
+                        await temp_client.sign_in(user.pending_phone, code)
                     
                     # Получаем информацию о пользователе
                     me = await temp_client.get_me()
