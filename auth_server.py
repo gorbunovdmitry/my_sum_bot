@@ -22,11 +22,21 @@ BOT_TOKEN = settings.bot_token
 def verify_telegram_auth(auth_data):
     """Проверка подписи от Telegram"""
     try:
-        # Получаем hash из данных
-        received_hash = auth_data.pop('hash', '')
+        # Создаем копию, чтобы не изменять оригинал
+        data_copy = auth_data.copy()
         
-        # Создаем строку для проверки
-        data_check_string = '\n'.join(f"{k}={v}" for k, v in sorted(auth_data.items()))
+        # Получаем hash из данных
+        received_hash = data_copy.pop('hash', '')
+        
+        if not received_hash:
+            logger.warning("Hash отсутствует в данных")
+            return False
+        
+        # Создаем строку для проверки (только те поля, которые есть в данных)
+        data_check_string = '\n'.join(f"{k}={v}" for k, v in sorted(data_copy.items()) if k != 'hash')
+        
+        logger.debug(f"Data check string: {data_check_string}")
+        logger.debug(f"Received hash: {received_hash}")
         
         # Вычисляем секретный ключ
         secret_key = hashlib.sha256(BOT_TOKEN.encode()).digest()
@@ -38,20 +48,27 @@ def verify_telegram_auth(auth_data):
             hashlib.sha256
         ).hexdigest()
         
+        logger.debug(f"Calculated hash: {calculated_hash}")
+        
         # Проверяем подпись
         if calculated_hash != received_hash:
-            logger.warning("Неверная подпись Telegram")
+            logger.warning(f"Неверная подпись Telegram. Ожидалось: {calculated_hash}, Получено: {received_hash}")
             return False
         
         # Проверяем время (не старше 24 часов)
-        auth_date = int(auth_data.get('auth_date', 0))
+        auth_date = int(data_copy.get('auth_date', 0))
+        if auth_date == 0:
+            logger.warning("auth_date отсутствует")
+            return False
+            
         if time.time() - auth_date > 86400:
-            logger.warning("Авторизация устарела")
+            logger.warning(f"Авторизация устарела. auth_date: {auth_date}, текущее время: {time.time()}")
             return False
         
+        logger.info("Подпись проверена успешно")
         return True
     except Exception as e:
-        logger.error(f"Ошибка проверки подписи: {e}")
+        logger.error(f"Ошибка проверки подписи: {e}", exc_info=True)
         return False
 
 
