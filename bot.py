@@ -161,14 +161,11 @@ class SummaryBot:
         await update.message.reply_text(help_text)
     
     async def auth(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Начать процесс авторизации через QR-код (одна авторизация)"""
+        """Начать процесс авторизации через номер телефона (удобно для мобильных)"""
         user_id = update.effective_user.id
         logger.info(f"Получена команда /auth от пользователя {user_id}")
         
         from database import SessionLocal
-        from io import BytesIO
-        import qrcode
-        
         db = SessionLocal()
         try:
             user = db.query(User).filter_by(telegram_id=user_id).first()
@@ -196,96 +193,19 @@ class SummaryBot:
                         self.app_instance.telegram_clients[user.id] = client
                     return
             
-            # Создаем временный клиент для QR-авторизации
-            temp_session = settings.session_dir / f"temp_qr_{user_id}.session"
-            try:
-                client = TelegramClient(
-                    str(temp_session),
-                    settings.telegram_api_id,
-                    settings.telegram_api_hash
-                )
-                
-                await client.connect()
-                
-                if not await client.is_user_authorized():
-                    # Генерируем QR-код
-                    qr_code = await client.qr_login()
-                    
-                    if qr_code:
-                        # Отправляем QR-код как изображение
-                        qr = qrcode.QRCode(version=1, box_size=10, border=5)
-                        qr.add_data(qr_code)
-                        qr.make(fit=True)
-                        
-                        img = qr.make_image(fill_color="black", back_color="white")
-                        bio = BytesIO()
-                        img.save(bio, format='PNG')
-                        bio.seek(0)
-                        
-                        await update.message.reply_photo(
-                            photo=bio,
-                            caption=(
-                                "🔐 Авторизация через QR-код\n\n"
-                                "1. Откройте Telegram на телефоне\n"
-                                "2. Настройки → Устройства → Связать устройство\n"
-                                "3. Отсканируйте QR-код выше\n\n"
-                                "⏳ Ожидание авторизации..."
-                            )
-                        )
-                        
-                        # Ждем авторизации (максимум 5 минут)
-                        for i in range(60):
-                            await asyncio.sleep(5)
-                            if await client.is_user_authorized():
-                                # Сохраняем сессию
-                                final_session = settings.session_dir / f"user_{user.id}.session"
-                                if temp_session.exists():
-                                    import shutil
-                                    shutil.copy(temp_session, final_session)
-                                
-                                # Получаем информацию о пользователе
-                                me = await client.get_me()
-                                user.phone = me.phone
-                                user.is_authorized = True
-                                user.auth_state = 'done'
-                                db.commit()
-                                
-                                await client.disconnect()
-                                
-                                # Сохраняем клиент в app_instance
-                                if self.app_instance:
-                                    safe_client = SafeTelegramClient(user.id, user.phone)
-                                    if await safe_client.connect():
-                                        self.app_instance.telegram_clients[user.id] = safe_client
-                                
-                                await update.message.reply_text(
-                                    "✅ Авторизация успешна!\n\n"
-                                    "Теперь вы можете:\n"
-                                    "• /enable - Включить бота\n"
-                                    "• /chats - Выбрать чаты для сканирования\n\n"
-                                    "💡 Сессия сохранена - больше не нужно авторизовываться!"
-                                )
-                                return
-                        
-                        await client.disconnect()
-                        await update.message.reply_text(
-                            "⏱️ Время ожидания истекло. Попробуйте еще раз: /auth"
-                        )
-                    else:
-                        await client.disconnect()
-                        await update.message.reply_text(
-                            "❌ Не удалось создать QR-код. Попробуйте позже: /auth"
-                        )
-                else:
-                    await client.disconnect()
-                    await update.message.reply_text(
-                        "✅ Уже авторизован! Используйте /enable чтобы включить бота."
-                    )
-            except Exception as e:
-                logger.error(f"Ошибка QR-авторизации: {e}", exc_info=True)
-                await update.message.reply_text(
-                    f"❌ Ошибка: {e}\n\nПопробуйте еще раз: /auth"
-                )
+            # Начинаем авторизацию через телефон
+            await update.message.reply_text(
+                "🔐 Авторизация через номер телефона\n\n"
+                "📱 Отправьте ваш номер телефона в международном формате:\n"
+                "Например: +79001234567\n\n"
+                "💡 Номер должен начинаться с '+' и кода страны"
+            )
+            
+            # Устанавливаем состояние авторизации
+            user.auth_state = 'phone'
+            db.commit()
+            logger.info(f"Пользователь {user_id} начал авторизацию, ожидается номер телефона")
+            
         except Exception as e:
             logger.error(f"Ошибка в команде /auth: {e}", exc_info=True)
             await update.message.reply_text(
@@ -376,9 +296,13 @@ class SummaryBot:
             )
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка текстовых сообщений (для авторизации)"""
+        """Обработка текстовых сообщений (для авторизации через телефон)"""
         user_id = update.effective_user.id
         text = update.message.text
+        
+        # Игнорируем команды
+        if text.startswith('/'):
+            return
         
         from database import SessionLocal
         db = SessionLocal()
@@ -386,17 +310,10 @@ class SummaryBot:
             user = db.query(User).filter_by(telegram_id=user_id).first()
             
             if not user or not user.auth_state:
-                return  # Игнорируем, если не в процессе авторизации
-            
-            # QR-авторизация не требует текстового ввода
-            if user.auth_state == 'qr':
-                await update.message.reply_text(
-                    "⏳ Ожидаю сканирования QR-кода...\n\n"
-                    "Откройте Telegram на телефоне и отсканируйте QR-код, который я отправил."
-                )
+                # Игнорируем сообщения, если пользователь не в процессе авторизации
                 return
             
-            # Старая логика с телефоном (оставлена для совместимости, но не используется)
+            # Обработка номера телефона
             if user.auth_state == 'phone':
                 # Сохраняем телефон и запрашиваем код
                 user.pending_phone = text
@@ -440,12 +357,20 @@ class SummaryBot:
                             pass
                         del self.auth_clients[user_id]
             
+            # Обработка кода
             elif user.auth_state == 'code':
-                # Проверяем код
+                code = text.strip()
+                
+                # Проверяем, что код состоит из цифр
+                if not code.isdigit():
+                    await update.message.reply_text(
+                        "❌ Код должен состоять только из цифр\n"
+                        "Попробуйте еще раз:"
+                    )
+                    return
+                
                 try:
-                    code = text.strip()
-                    temp_client = self.auth_clients.get(user_id)
-                    
+                    temp_client = self.auth_clients.get(user_id) if hasattr(self, 'auth_clients') else None
                     if not temp_client:
                         await update.message.reply_text(
                             "❌ Сессия авторизации истекла. Попробуйте /auth еще раз"
@@ -457,6 +382,9 @@ class SummaryBot:
                     # Авторизуемся
                     await temp_client.sign_in(user.pending_phone, code)
                     
+                    # Получаем информацию о пользователе
+                    me = await temp_client.get_me()
+                    
                     # Сохраняем сессию в правильное место
                     import shutil
                     temp_session = settings.session_dir / f"temp_auth_{user_id}.session"
@@ -465,7 +393,7 @@ class SummaryBot:
                         shutil.copy(temp_session, final_session)
                     
                     # Сохраняем успешную авторизацию
-                    user.phone = user.pending_phone
+                    user.phone = me.phone or user.pending_phone
                     user.is_authorized = True
                     user.auth_state = 'done'
                     user.pending_phone = None
@@ -473,7 +401,51 @@ class SummaryBot:
                     
                     # Закрываем временный клиент
                     await temp_client.disconnect()
-                    del self.auth_clients[user_id]
+                    if hasattr(self, 'auth_clients'):
+                        self.auth_clients.pop(user_id, None)
+                    
+                    # Удаляем временную сессию
+                    if temp_session.exists():
+                        temp_session.unlink()
+                    
+                    # Сохраняем клиент в app_instance
+                    if self.app_instance:
+                        safe_client = SafeTelegramClient(user.id, user.phone)
+                        if await safe_client.connect():
+                            self.app_instance.telegram_clients[user.id] = safe_client
+                    
+                    await update.message.reply_text(
+                        "✅ Авторизация успешна!\n\n"
+                        "Теперь вы можете:\n"
+                        "• /enable - Включить бота\n"
+                        "• /chats - Выбрать чаты для сканирования\n\n"
+                        "💡 Сессия сохранена - больше не нужно авторизовываться!"
+                    )
+                    logger.info(f"Пользователь {user_id} успешно авторизован")
+                except Exception as e:
+                    logger.error(f"Ошибка авторизации: {e}", exc_info=True)
+                    error_msg = str(e)
+                    if "PHONE_CODE_INVALID" in error_msg:
+                        await update.message.reply_text(
+                            "❌ Неверный код. Попробуйте еще раз:\n"
+                            "Отправьте код, который вы получили в Telegram"
+                        )
+                    elif "PHONE_NUMBER_UNOCCUPIED" in error_msg:
+                        await update.message.reply_text(
+                            "❌ Этот номер телефона не зарегистрирован в Telegram.\n"
+                            "Попробуйте другой номер: /auth"
+                        )
+                        user.auth_state = None
+                        user.pending_phone = None
+                        db.commit()
+                    else:
+                        await update.message.reply_text(
+                            f"❌ Ошибка авторизации: {e}\n\n"
+                            "Попробуйте еще раз: /auth"
+                        )
+                        user.auth_state = None
+                        user.pending_phone = None
+                        db.commit()
                     
                     # Удаляем временную сессию
                     if temp_session.exists():
