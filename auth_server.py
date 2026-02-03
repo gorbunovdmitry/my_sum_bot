@@ -60,9 +60,16 @@ def auth_callback():
     """Обработка callback от Telegram Login Widget"""
     try:
         data = request.json
+        logger.info(f"Получен callback: {data}")
+        
+        if not data:
+            logger.error("Пустые данные в callback")
+            return jsonify({'success': False, 'error': 'Пустые данные'}), 400
         
         # Проверяем подпись
-        if not verify_telegram_auth(data.copy()):
+        auth_data_copy = data.copy()
+        if not verify_telegram_auth(auth_data_copy):
+            logger.warning("Неверная подпись Telegram")
             return jsonify({'success': False, 'error': 'Неверная подпись'}), 400
         
         user_id = data.get('id')
@@ -78,6 +85,7 @@ def auth_callback():
             user = db.query(User).filter_by(telegram_id=user_id).first()
             
             if not user:
+                logger.info(f"Создание нового пользователя {user_id}")
                 user = User(telegram_id=user_id)
                 db.add(user)
             
@@ -92,12 +100,16 @@ def auth_callback():
             user.preferences['username'] = username
             
             db.commit()
-            logger.info(f"Пользователь {user_id} успешно авторизован")
+            logger.info(f"Пользователь {user_id} успешно авторизован и сохранен в БД")
             
             return jsonify({
                 'success': True,
                 'message': 'Авторизация успешна'
             })
+        except Exception as db_error:
+            logger.error(f"Ошибка работы с БД: {db_error}", exc_info=True)
+            db.rollback()
+            return jsonify({'success': False, 'error': f'Ошибка БД: {str(db_error)}'}), 500
         finally:
             db.close()
             
