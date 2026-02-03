@@ -379,7 +379,8 @@ class SummaryBot:
                         db.commit()
                         return
                     
-                    # Авторизуемся
+                    # Авторизуемся (с небольшой задержкой для безопасности)
+                    await asyncio.sleep(0.5)  # Задержка для снижения риска блокировки
                     await temp_client.sign_in(user.pending_phone, code)
                     
                     # Получаем информацию о пользователе
