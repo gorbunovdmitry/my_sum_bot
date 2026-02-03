@@ -278,13 +278,29 @@ class SummaryBot:
                     
                     # Определяем тип отправки кода
                     code_type = "Telegram сообщение"
+                    code_length = 5
+                    where_to_find = "В Telegram, в чате **Telegram** (\"Login code\")"
+                    
                     if hasattr(result, 'type'):
-                        if result.type == 1:  # SentCodeTypeSms
+                        type_name = str(result.type)
+                        logger.info(f"Тип отправки кода: {type_name}")
+                        
+                        if 'Sms' in type_name or result.type.CONSTRUCTOR_ID == 0x3cbbcd6c:
                             code_type = "SMS"
-                        elif result.type == 2:  # SentCodeTypeCall
+                            where_to_find = "В SMS на номер телефона"
+                        elif 'Call' in type_name:
                             code_type = "телефонный звонок"
-                        elif result.type == 3:  # SentCodeTypeFlashCall
+                            where_to_find = "В телефонном звонке (автоответчик)"
+                        elif 'FlashCall' in type_name:
                             code_type = "мгновенный звонок"
+                            where_to_find = "В номере входящего звонка"
+                        elif 'App' in type_name:
+                            code_type = "Telegram приложение"
+                            where_to_find = "В Telegram, в чате **Telegram** (\"Login code\")"
+                            if hasattr(result.type, 'length'):
+                                code_length = result.type.length
+                    
+                    logger.info(f"Тип отправки: {code_type}, длина кода: {code_length}, где искать: {where_to_find}")
                     
                     # Сохраняем клиент для дальнейшего использования
                     if not hasattr(self, 'auth_clients'):
@@ -293,13 +309,17 @@ class SummaryBot:
                     
                     await update.message.reply_text(
                         f"✅ Запрос кода отправлен!\n\n"
-                        f"📱 Тип отправки: **{code_type}**\n\n"
-                        "Где искать код:\n"
-                        "• В Telegram, в чате **Telegram** (\"Login code\")\n"
-                        "• В SMS (если указано выше)\n"
-                        "• Пуш-уведомлением в Telegram\n\n"
-                        "⏳ Код обычно приходит в течение 1-2 минут.\n\n"
-                        "Отправьте сюда код цифрами (например: 12345)."
+                        f"📱 Тип отправки: **{code_type}**\n"
+                        f"🔢 Длина кода: **{code_length}** цифр\n\n"
+                        f"📍 **Где искать код:**\n"
+                        f"{where_to_find}\n\n"
+                        "💡 **Важно:**\n"
+                        "• Откройте Telegram на телефоне\n"
+                        "• Найдите чат с названием **\"Telegram\"** (синий значок)\n"
+                        "• Код придет как сообщение \"Login code: XXXXX\"\n"
+                        "• Иногда приходит пуш-уведомлением\n\n"
+                        "⏳ Код обычно приходит в течение 10-60 секунд.\n\n"
+                        f"Отправьте сюда код из {code_length} цифр (например: {'1' * code_length})."
                     )
                     logger.info(f"send_code_request успешно выполнен для user={user_id} phone={phone} type={code_type}")
                 except Exception as e:
